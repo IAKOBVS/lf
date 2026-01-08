@@ -3,7 +3,6 @@
 package main
 
 import (
-	"cmp"
 	"fmt"
 	"log"
 	"os"
@@ -11,7 +10,6 @@ import (
 	"os/user"
 	"path/filepath"
 	"runtime"
-	"strconv"
 	"strings"
 	"syscall"
 
@@ -26,11 +24,10 @@ var (
 )
 
 var (
-	gDefaultShell       = "sh"
-	gDefaultShellFlag   = "-c"
-	gDefaultSocketProt  = "unix"
-	gDefaultSocketPath  string
-	gDefaultHiddenFiles = []string{".*"}
+	gDefaultShell      = "sh"
+	gDefaultShellFlag  = "-c"
+	gDefaultSocketProt = "unix"
+	gDefaultSocketPath string
 )
 
 var (
@@ -38,7 +35,6 @@ var (
 	gConfigPaths []string
 	gColorsPaths []string
 	gIconsPaths  []string
-	gRulerPaths  []string
 	gFilesPath   string
 	gMarksPath   string
 	gTagsPath    string
@@ -55,7 +51,10 @@ func init() {
 	}
 
 	if envEditor == "" {
-		envEditor = cmp.Or(os.Getenv("EDITOR"), "vi")
+		envEditor = os.Getenv("EDITOR")
+		if envEditor == "" {
+			envEditor = "vi"
+		}
 	}
 
 	if envPager == "" {
@@ -85,11 +84,10 @@ func init() {
 	}
 	gUser = u
 
-	config := cmp.Or(
-		os.Getenv("LF_CONFIG_HOME"),
-		os.Getenv("XDG_CONFIG_HOME"),
-		filepath.Join(gUser.HomeDir, ".config"),
-	)
+	config := os.Getenv("XDG_CONFIG_HOME")
+	if config == "" {
+		config = filepath.Join(gUser.HomeDir, ".config")
+	}
 
 	gConfigPaths = []string{
 		filepath.Join("/etc", "lf", "lfrc"),
@@ -106,23 +104,20 @@ func init() {
 		filepath.Join(config, "lf", "icons"),
 	}
 
-	gRulerPaths = []string{
-		filepath.Join("/etc", "lf", "ruler"),
-		filepath.Join(config, "lf", "ruler"),
+	data := os.Getenv("XDG_DATA_HOME")
+	if data == "" {
+		data = filepath.Join(gUser.HomeDir, ".local", "share")
 	}
-
-	data := cmp.Or(
-		os.Getenv("LF_DATA_HOME"),
-		os.Getenv("XDG_DATA_HOME"),
-		filepath.Join(gUser.HomeDir, ".local", "share"),
-	)
 
 	gFilesPath = filepath.Join(data, "lf", "files")
 	gMarksPath = filepath.Join(data, "lf", "marks")
 	gTagsPath = filepath.Join(data, "lf", "tags")
 	gHistoryPath = filepath.Join(data, "lf", "history")
 
-	runtime := cmp.Or(os.Getenv("XDG_RUNTIME_DIR"), os.TempDir())
+	runtime := os.Getenv("XDG_RUNTIME_DIR")
+	if runtime == "" {
+		runtime = os.TempDir()
+	}
 
 	gDefaultSocketPath = filepath.Join(runtime, fmt.Sprintf("lf.%s.sock", gUser.Username))
 }
@@ -153,7 +148,7 @@ func shellKill(cmd *exec.Cmd) error {
 	pgid, err := unix.Getpgid(cmd.Process.Pid)
 	if err == nil && cmd.Process.Pid == pgid {
 		// kill the process group
-		err = unix.Kill(-pgid, syscall.SIGTERM)
+		err = unix.Kill(-pgid, 15)
 		if err == nil {
 			return nil
 		}
@@ -163,37 +158,30 @@ func shellKill(cmd *exec.Cmd) error {
 
 func setDefaults() {
 	gOpts.cmds["open"] = &execExpr{"&", `$OPENER "$f"`}
-	gOpts.nkeys["e"] = &execExpr{"$", `$EDITOR "$f"`}
-	gOpts.vkeys["e"] = &execExpr{"$", `$EDITOR "$f"`}
-	gOpts.nkeys["i"] = &execExpr{"$", `$PAGER "$f"`}
-	gOpts.vkeys["i"] = &execExpr{"$", `$PAGER "$f"`}
-	gOpts.nkeys["w"] = &execExpr{"$", "$SHELL"}
-	gOpts.vkeys["w"] = &execExpr{"$", "$SHELL"}
+	gOpts.keys["e"] = &execExpr{"$", `$EDITOR "$f"`}
+	gOpts.keys["i"] = &execExpr{"$", `$PAGER "$f"`}
+	gOpts.keys["w"] = &execExpr{"$", "$SHELL"}
 
-	gOpts.cmds["help"] = &execExpr{"$", `"$lf" -doc | $PAGER`}
-	gOpts.nkeys["<f-1>"] = &callExpr{"help", nil, 1}
-	gOpts.vkeys["<f-1>"] = &callExpr{"help", nil, 1}
-
-	gOpts.cmds["maps"] = &execExpr{"$", `"$lf" -remote "query $id maps" | $PAGER`}
-	gOpts.cmds["nmaps"] = &execExpr{"$", `"$lf" -remote "query $id nmaps" | $PAGER`}
-	gOpts.cmds["vmaps"] = &execExpr{"$", `"$lf" -remote "query $id vmaps" | $PAGER`}
-	gOpts.cmds["cmaps"] = &execExpr{"$", `"$lf" -remote "query $id cmaps" | $PAGER`}
-	gOpts.cmds["cmds"] = &execExpr{"$", `"$lf" -remote "query $id cmds" | $PAGER`}
+	gOpts.cmds["doc"] = &execExpr{"$", `"$lf" -doc | $PAGER`}
+	gOpts.keys["<f-1>"] = &callExpr{"doc", nil, 1}
 }
 
 func setUserUmask() {
-	unix.Umask(0o077)
+	unix.Umask(0077)
 }
 
 func isExecutable(f os.FileInfo) bool {
-	return f.Mode()&0o111 != 0
+	return f.Mode()&0111 != 0
 }
 
 func isHidden(f os.FileInfo, path string, hiddenfiles []string) bool {
 	hidden := false
 	for _, pattern := range hiddenfiles {
-		if matchPattern(strings.TrimPrefix(pattern, "!"), f.Name(), path) {
-			hidden = !strings.HasPrefix(pattern, "!")
+		matched := matchPattern(strings.TrimPrefix(pattern, "!"), f.Name(), path)
+		if strings.HasPrefix(pattern, "!") && matched {
+			hidden = false
+		} else if matched {
+			hidden = true
 		}
 	}
 	return hidden
@@ -201,29 +189,25 @@ func isHidden(f os.FileInfo, path string, hiddenfiles []string) bool {
 
 func userName(f os.FileInfo) string {
 	if stat, ok := f.Sys().(*syscall.Stat_t); ok {
-		uid := strconv.FormatUint(uint64(stat.Uid), 10)
-		if u, err := user.LookupId(uid); err == nil {
-			return u.Username
+		if u, err := user.LookupId(fmt.Sprint(stat.Uid)); err == nil {
+			return fmt.Sprintf("%v ", u.Username)
 		}
-		return uid
 	}
 	return ""
 }
 
 func groupName(f os.FileInfo) string {
 	if stat, ok := f.Sys().(*syscall.Stat_t); ok {
-		gid := strconv.FormatUint(uint64(stat.Gid), 10)
-		if g, err := user.LookupGroupId(gid); err == nil {
-			return g.Name
+		if g, err := user.LookupGroupId(fmt.Sprint(stat.Gid)); err == nil {
+			return fmt.Sprintf("%v ", g.Name)
 		}
-		return gid
 	}
 	return ""
 }
 
 func linkCount(f os.FileInfo) string {
 	if stat, ok := f.Sys().(*syscall.Stat_t); ok {
-		return strconv.FormatUint(uint64(stat.Nlink), 10)
+		return fmt.Sprintf("%v ", stat.Nlink)
 	}
 	return ""
 }
@@ -232,34 +216,17 @@ func errCrossDevice(err error) bool {
 	return err.(*os.LinkError).Err.(unix.Errno) == unix.EXDEV
 }
 
-func quoteString(s string) string {
-	return s
-}
+func exportFiles(f string, fs []string, pwd string) {
+	envFile := f
+	envFiles := strings.Join(fs, gOpts.filesep)
 
-func shellEscape(s string) string {
-	buf := make([]rune, 0, len(s))
-	for _, r := range s {
-		if strings.ContainsRune(" !\"$&'()*,:;<=>?@[\\]^`{|}", r) {
-			buf = append(buf, '\\')
-		}
-		buf = append(buf, r)
-	}
-	return string(buf)
-}
+	os.Setenv("f", envFile)
+	os.Setenv("fs", envFiles)
+	os.Setenv("PWD", pwd)
 
-func shellUnescape(s string) string {
-	esc := false
-	buf := make([]rune, 0, len(s))
-	for _, r := range s {
-		if r == '\\' && !esc {
-			esc = true
-			continue
-		}
-		esc = false
-		buf = append(buf, r)
+	if len(fs) == 0 {
+		os.Setenv("fx", envFile)
+	} else {
+		os.Setenv("fx", envFiles)
 	}
-	if esc {
-		buf = append(buf, '\\')
-	}
-	return string(buf)
 }

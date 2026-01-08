@@ -1,7 +1,6 @@
 package main
 
 import (
-	"cmp"
 	"fmt"
 	"log"
 	"os"
@@ -9,7 +8,6 @@ import (
 	"os/user"
 	"path/filepath"
 	"strings"
-	"syscall"
 
 	"golang.org/x/sys/windows"
 )
@@ -24,11 +22,10 @@ var (
 var envPathExt = os.Getenv("PATHEXT")
 
 var (
-	gDefaultShell       = "cmd"
-	gDefaultShellFlag   = "/c"
-	gDefaultSocketProt  = "unix"
-	gDefaultSocketPath  string
-	gDefaultHiddenFiles []string
+	gDefaultShell      = "cmd"
+	gDefaultShellFlag  = "/c"
+	gDefaultSocketProt = "tcp"
+	gDefaultSocketPath = "127.0.0.1:12345"
 )
 
 var (
@@ -36,7 +33,6 @@ var (
 	gConfigPaths []string
 	gColorsPaths []string
 	gIconsPaths  []string
-	gRulerPaths  []string
 	gFilesPath   string
 	gTagsPath    string
 	gMarksPath   string
@@ -49,7 +45,10 @@ func init() {
 	}
 
 	if envEditor == "" {
-		envEditor = cmp.Or(os.Getenv("EDITOR"), "notepad")
+		envEditor = os.Getenv("EDITOR")
+		if envEditor == "" {
+			envEditor = "notepad"
+		}
 	}
 
 	if envPager == "" {
@@ -60,67 +59,36 @@ func init() {
 		envShell = "cmd"
 	}
 
-	homeDir, err := os.UserHomeDir()
+	u, err := user.Current()
 	if err != nil {
-		panic(err)
+		log.Printf("user: %s", err)
 	}
+	gUser = u
 
-	username := os.Getenv("USERNAME")
-	if username == "" {
-		panic("$USERNAME variable is empty or not set")
-	}
+	// remove domain prefix
+	gUser.Username = strings.Split(gUser.Username, `\`)[1]
 
-	gUser = &user.User{
-		HomeDir:  homeDir,
-		Username: username,
-	}
-
-	config := cmp.Or(
-		os.Getenv("LF_CONFIG_HOME"),
-		os.Getenv("XDG_CONFIG_HOME"),
-		os.Getenv("APPDATA"),
-	)
+	data := os.Getenv("LOCALAPPDATA")
 
 	gConfigPaths = []string{
 		filepath.Join(os.Getenv("ProgramData"), "lf", "lfrc"),
-		filepath.Join(config, "lf", "lfrc"),
+		filepath.Join(data, "lf", "lfrc"),
 	}
 
 	gColorsPaths = []string{
 		filepath.Join(os.Getenv("ProgramData"), "lf", "colors"),
-		filepath.Join(config, "lf", "colors"),
+		filepath.Join(data, "lf", "colors"),
 	}
 
 	gIconsPaths = []string{
 		filepath.Join(os.Getenv("ProgramData"), "lf", "icons"),
-		filepath.Join(config, "lf", "icons"),
+		filepath.Join(data, "lf", "icons"),
 	}
-
-	gRulerPaths = []string{
-		filepath.Join(os.Getenv("ProgramData"), "lf", "ruler"),
-		filepath.Join(config, "lf", "ruler"),
-	}
-
-	data := cmp.Or(
-		os.Getenv("LF_DATA_HOME"),
-		os.Getenv("XDG_DATA_HOME"),
-		os.Getenv("LOCALAPPDATA"),
-	)
 
 	gFilesPath = filepath.Join(data, "lf", "files")
 	gMarksPath = filepath.Join(data, "lf", "marks")
 	gTagsPath = filepath.Join(data, "lf", "tags")
 	gHistoryPath = filepath.Join(data, "lf", "history")
-
-	socket, err := syscall.Socket(syscall.AF_UNIX, syscall.SOCK_STREAM, 0)
-	if err != nil {
-		gDefaultSocketProt = "tcp"
-		gDefaultSocketPath = "127.0.0.1:12345"
-	} else {
-		runtime := os.TempDir()
-		gDefaultSocketPath = filepath.Join(runtime, fmt.Sprintf("lf.%s.sock", gUser.Username))
-		syscall.Close(socket)
-	}
 }
 
 func detachedCommand(name string, arg ...string) *exec.Cmd {
@@ -130,27 +98,14 @@ func detachedCommand(name string, arg ...string) *exec.Cmd {
 }
 
 func shellCommand(s string, args []string) *exec.Cmd {
-	// Windows CMD requires special handling to deal with quoted arguments
-	if strings.ToLower(gOpts.shell) == "cmd" {
-		var builder strings.Builder
-		builder.WriteString(s)
-		for _, arg := range args {
-			fmt.Fprintf(&builder, ` "%s"`, arg)
-		}
-		shellOpts := strings.Join(gOpts.shellopts, " ")
-		cmdline := fmt.Sprintf(`%s %s %s "%s"`, gOpts.shell, shellOpts, gOpts.shellflag, builder.String())
-
-		cmd := exec.Command(gOpts.shell)
-		cmd.SysProcAttr = &windows.SysProcAttr{CmdLine: cmdline}
-		return cmd
-	}
-
 	args = append([]string{gOpts.shellflag, s}, args...)
+
 	args = append(gOpts.shellopts, args...)
+
 	return exec.Command(gOpts.shell, args...)
 }
 
-func shellSetPG(_ *exec.Cmd) {
+func shellSetPG(cmd *exec.Cmd) {
 }
 
 func shellKill(cmd *exec.Cmd) error {
@@ -159,28 +114,19 @@ func shellKill(cmd *exec.Cmd) error {
 
 func setDefaults() {
 	gOpts.cmds["open"] = &execExpr{"&", "%OPENER% %f%"}
-	gOpts.nkeys["e"] = &execExpr{"$", "%EDITOR% %f%"}
-	gOpts.vkeys["e"] = &execExpr{"$", "%EDITOR% %f%"}
-	gOpts.nkeys["i"] = &execExpr{"!", "%PAGER% %f%"}
-	gOpts.vkeys["i"] = &execExpr{"!", "%PAGER% %f%"}
-	gOpts.nkeys["w"] = &execExpr{"$", "%SHELL%"}
-	gOpts.vkeys["w"] = &execExpr{"$", "%SHELL%"}
+	gOpts.keys["e"] = &execExpr{"$", "%EDITOR% %f%"}
+	gOpts.keys["i"] = &execExpr{"!", "%PAGER% %f%"}
+	gOpts.keys["w"] = &execExpr{"$", "%SHELL%"}
 
-	gOpts.cmds["help"] = &execExpr{"!", "%lf% -doc | %PAGER%"}
-	gOpts.nkeys["<f-1>"] = &callExpr{"help", nil, 1}
-	gOpts.vkeys["<f-1>"] = &callExpr{"help", nil, 1}
-
-	gOpts.cmds["maps"] = &execExpr{"!", `%lf% -remote "query %id% maps" | %PAGER%`}
-	gOpts.cmds["nmaps"] = &execExpr{"!", `%lf% -remote "query %id% nmaps" | %PAGER%`}
-	gOpts.cmds["vmaps"] = &execExpr{"!", `%lf% -remote "query %id% vmaps" | %PAGER%`}
-	gOpts.cmds["cmaps"] = &execExpr{"!", `%lf% -remote "query %id% cmaps" | %PAGER%`}
-	gOpts.cmds["cmds"] = &execExpr{"!", `%lf% -remote "query %id% cmds" | %PAGER%`}
+	gOpts.cmds["doc"] = &execExpr{"!", "%lf% -doc | %PAGER%"}
+	gOpts.keys["<f-1>"] = &callExpr{"doc", nil, 1}
 }
 
 func setUserUmask() {}
 
 func isExecutable(f os.FileInfo) bool {
-	for e := range strings.SplitSeq(envPathExt, string(filepath.ListSeparator)) {
+	exts := strings.Split(envPathExt, string(filepath.ListSeparator))
+	for _, e := range exts {
 		if strings.HasSuffix(strings.ToLower(f.Name()), strings.ToLower(e)) {
 			log.Print(f.Name(), e)
 			return true
@@ -198,54 +144,43 @@ func isHidden(f os.FileInfo, path string, hiddenfiles []string) bool {
 	if err != nil {
 		return false
 	}
-
-	if attrs&windows.FILE_ATTRIBUTE_HIDDEN != 0 {
-		return true
-	}
-
-	hidden := false
-	for _, pattern := range hiddenfiles {
-		if matchPattern(strings.TrimPrefix(pattern, "!"), f.Name(), path) {
-			hidden = !strings.HasPrefix(pattern, "!")
-		}
-	}
-
-	return hidden
+	return attrs&windows.FILE_ATTRIBUTE_HIDDEN != 0
 }
 
-func userName(_ os.FileInfo) string {
+func userName(f os.FileInfo) string {
 	return ""
 }
 
-func groupName(_ os.FileInfo) string {
+func groupName(f os.FileInfo) string {
 	return ""
 }
 
-func linkCount(_ os.FileInfo) string {
+func linkCount(f os.FileInfo) string {
 	return ""
 }
 
 func errCrossDevice(err error) bool {
-	return err.(*os.LinkError).Err.(windows.Errno) == windows.ERROR_NOT_SAME_DEVICE
+	return err.(*os.LinkError).Err.(windows.Errno) == 17
 }
 
-func quoteString(s string) string {
-	// Windows CMD requires special handling to deal with quoted arguments
-	if strings.ToLower(gOpts.shell) == "cmd" {
-		return fmt.Sprintf(`"%s"`, s)
+func exportFiles(f string, fs []string, pwd string) {
+	envFile := fmt.Sprintf(`"%s"`, f)
+
+	var quotedFiles []string
+	for _, f := range fs {
+		quotedFiles = append(quotedFiles, fmt.Sprintf(`"%s"`, f))
 	}
-	return s
-}
+	envFiles := strings.Join(quotedFiles, gOpts.filesep)
 
-func shellEscape(s string) string {
-	for _, r := range s {
-		if strings.ContainsRune(" !%&'()+,;=[]^`{}~", r) {
-			return fmt.Sprintf(`"%s"`, s)
-		}
+	envPWD := fmt.Sprintf(`"%s"`, pwd)
+
+	os.Setenv("f", envFile)
+	os.Setenv("fs", envFiles)
+	os.Setenv("PWD", envPWD)
+
+	if len(fs) == 0 {
+		os.Setenv("fx", envFile)
+	} else {
+		os.Setenv("fx", envFiles)
 	}
-	return s
-}
-
-func shellUnescape(s string) string {
-	return strings.ReplaceAll(s, `"`, "")
 }

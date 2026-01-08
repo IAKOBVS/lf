@@ -6,7 +6,6 @@ import (
 	"log"
 	"net"
 	"os"
-	"sort"
 	"strconv"
 )
 
@@ -18,15 +17,15 @@ var (
 
 func serve() {
 	if gLogPath != "" {
-		f, err := os.OpenFile(gLogPath, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0o600)
+		f, err := os.OpenFile(gLogPath, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0600)
 		if err != nil {
-			log.Fatalf("failed to open log file: %s", err)
+			panic(err)
 		}
 		defer f.Close()
 		log.SetOutput(f)
 	}
 
-	log.Print("*************** starting server ***************")
+	log.Print("hi!")
 
 	if gSocketProt == "unix" {
 		setUserUmask()
@@ -50,7 +49,7 @@ func listen(l net.Listener) {
 		if err != nil {
 			select {
 			case <-gQuitChan:
-				log.Print("*************** closing server ***************")
+				log.Printf("bye!")
 				return
 			default:
 				log.Printf("accepting connection: %s", err)
@@ -65,7 +64,7 @@ func echoerr(c net.Conn, msg string) {
 	log.Print(msg)
 }
 
-func echoerrf(c net.Conn, format string, a ...any) {
+func echoerrf(c net.Conn, format string, a ...interface{}) {
 	echoerr(c, fmt.Sprintf(format, a...))
 }
 
@@ -84,10 +83,7 @@ Loop:
 				if err != nil {
 					echoerr(c, "listen: conn: client id should be a number")
 				} else {
-					// lifetime of the connection is managed by the server and
-					// will be cleaned up via the `drop` command
 					gConnList[id] = c
-					return
 				}
 			} else {
 				echoerr(c, "listen: conn: requires a client id")
@@ -99,71 +95,26 @@ Loop:
 				if err != nil {
 					echoerr(c, "listen: drop: client id should be a number")
 				} else {
-					if c2, ok := gConnList[id]; ok {
-						c2.Close()
-					}
 					delete(gConnList, id)
 				}
 			} else {
 				echoerr(c, "listen: drop: requires a client id")
-			}
-		case "list":
-			ids := make([]int, 0, len(gConnList))
-			for id := range gConnList {
-				ids = append(ids, id)
-			}
-			sort.Ints(ids)
-			for _, id := range ids {
-				fmt.Fprintln(c, id)
 			}
 		case "send":
 			if rest != "" {
 				word2, rest2 := splitWord(rest)
 				id, err := strconv.Atoi(word2)
 				if err != nil {
-					for id, c2 := range gConnList {
-						if _, err := fmt.Fprintln(c2, rest); err != nil {
-							echoerrf(c, "failed to send command to client %v: %s", id, err)
-						}
+					for _, c := range gConnList {
+						fmt.Fprintln(c, rest)
 					}
 				} else {
 					if c2, ok := gConnList[id]; ok {
-						if _, err := fmt.Fprintln(c2, rest2); err != nil {
-							echoerrf(c, "failed to send command to client %v: %s", id, err)
-						}
+						fmt.Fprintln(c2, rest2)
 					} else {
 						echoerr(c, "listen: send: no such client id is connected")
 					}
 				}
-			}
-		case "query":
-			if rest == "" {
-				echoerr(c, "listen: query: requires a client id")
-				break
-			}
-			word2, rest2 := splitWord(rest)
-			id, err := strconv.Atoi(word2)
-			if err != nil {
-				echoerr(c, "listen: query: client id should be a number")
-				break
-			}
-			c2, ok := gConnList[id]
-			if !ok {
-				echoerr(c, "listen: query: no such client id is connected")
-				break
-			}
-			if _, err := fmt.Fprintln(c2, "query "+rest2); err != nil {
-				echoerrf(c, "failed to send query to client %v: %s", id, err)
-				break
-			}
-			s2 := bufio.NewScanner(c2)
-			for s2.Scan() && s2.Text() != "" {
-				if _, err := fmt.Fprintln(c, s2.Text()); err != nil {
-					log.Printf("failed to forward query response from client %v: %s", id, err)
-				}
-			}
-			if s2.Err() != nil {
-				echoerrf(c, "failed to read query response from client %v: %s", id, s2.Err())
 			}
 		case "quit":
 			if len(gConnList) == 0 {

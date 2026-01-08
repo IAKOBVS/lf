@@ -9,16 +9,10 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
-	"runtime/debug"
 	"runtime/pprof"
 	"strconv"
 	"strings"
-
-	_ "embed"
 )
-
-//go:embed doc.txt
-var genDocString string
 
 var (
 	envPath  = os.Getenv("PATH")
@@ -28,20 +22,18 @@ var (
 type arrayFlag []string
 
 var (
-	gSingleMode     bool
-	gPrintLastDir   bool
-	gPrintSelection bool
-	gClientID       int
-	gHostname       string
-	gLastDirPath    string
-	gSelectionPath  string
-	gSocketProt     string
-	gSocketPath     string
-	gLogPath        string
-	gSelect         string
-	gConfigPath     string
-	gCommands       arrayFlag
-	gVersion        string
+	gSingleMode    bool
+	gClientID      int
+	gHostname      string
+	gLastDirPath   string
+	gSelectionPath string
+	gSocketProt    string
+	gSocketPath    string
+	gLogPath       string
+	gSelect        string
+	gConfigPath    string
+	gCommands      arrayFlag
+	gVersion       string
 )
 
 func (a *arrayFlag) Set(v string) error {
@@ -87,16 +79,13 @@ func exportEnvVars() {
 	level++
 
 	os.Setenv("LF_LEVEL", strconv.Itoa(level))
-}
 
-func exportFlags() {
-	os.Setenv("lf_flag_config", gConfigPath)
-	os.Setenv("lf_flag_last_dir_path", gLastDirPath)
-	os.Setenv("lf_flag_log", gLogPath)
-	os.Setenv("lf_flag_print_last_dir", strconv.FormatBool(gPrintLastDir))
-	os.Setenv("lf_flag_print_selection", strconv.FormatBool(gPrintSelection))
-	os.Setenv("lf_flag_selection_path", gSelectionPath)
-	os.Setenv("lf_flag_single", strconv.FormatBool(gSingleMode))
+	lfPath, err := os.Executable()
+	if err != nil {
+		log.Printf("getting path to lf binary: %s", err)
+		lfPath = "lf"
+	}
+	os.Setenv("lf", lfPath)
 }
 
 // used by exportOpts below
@@ -110,7 +99,7 @@ func fieldToString(field reflect.Value) string {
 	case reflect.Bool:
 		value = strconv.FormatBool(field.Bool())
 	case reflect.Slice:
-		for i := range field.Len() {
+		for i := 0; i < field.Len(); i++ {
 			element := field.Index(i)
 
 			if i == 0 {
@@ -126,45 +115,60 @@ func fieldToString(field reflect.Value) string {
 	return value
 }
 
-func getOptsMap() map[string]string {
-	opts := make(map[string]string)
+func exportOpts() {
 	v := reflect.ValueOf(gOpts)
 	t := v.Type()
 
-	for i := range v.NumField() {
+	for i := 0; i < v.NumField(); i++ {
 		// Get field name and prefix it with lf_
 		name := "lf_" + t.Field(i).Name
 
 		// Skip maps
-		if name == "lf_nkeys" || name == "lf_vkeys" || name == "lf_cmdkeys" || name == "lf_cmds" {
+		if name == "lf_keys" || name == "lf_cmdkeys" || name == "lf_cmds" {
 			continue
 		}
 
-		if name == "lf_user" {
+		// Get string representation of the value
+		if name == "lf_sortType" {
+			var sortby string
+
+			switch gOpts.sortType.method {
+			case naturalSort:
+				sortby = "natural"
+			case nameSort:
+				sortby = "name"
+			case sizeSort:
+				sortby = "size"
+			case timeSort:
+				sortby = "time"
+			case ctimeSort:
+				sortby = "ctime"
+			case atimeSort:
+				sortby = "atime"
+			case extSort:
+				sortby = "ext"
+			}
+
+			os.Setenv("lf_sortby", sortby)
+
+			reverse := strconv.FormatBool(gOpts.sortType.option&reverseSort != 0)
+			os.Setenv("lf_reverse", reverse)
+
+			hidden := strconv.FormatBool(gOpts.sortType.option&hiddenSort != 0)
+			os.Setenv("lf_hidden", hidden)
+
+			dirfirst := strconv.FormatBool(gOpts.sortType.option&dirfirstSort != 0)
+			os.Setenv("lf_dirfirst", dirfirst)
+		} else if name == "lf_user" {
 			// set each user option
 			for key, value := range gOpts.user {
-				opts[name+"_"+key] = value
+				os.Setenv(name+"_"+key, value)
 			}
 		} else {
-			opts[name] = fieldToString(v.Field(i))
+			field := v.Field(i)
+			value := fieldToString(field)
+			os.Setenv(name, value)
 		}
-	}
-
-	return opts
-}
-
-func exportLfPath() {
-	lfPath, err := os.Executable()
-	if err != nil {
-		log.Printf("getting path to lf binary: %s", err)
-		lfPath = "lf"
-	}
-	os.Setenv("lf", quoteString(lfPath))
-}
-
-func exportOpts() {
-	for key, value := range getOptsMap() {
-		os.Setenv(key, value)
 	}
 }
 
@@ -180,9 +184,7 @@ func checkServer() {
 		if _, err := os.Stat(gSocketPath); os.IsNotExist(err) {
 			startServer()
 		} else if _, err := net.Dial(gSocketProt, gSocketPath); err != nil {
-			if err := os.Remove(gSocketPath); err != nil {
-				log.Print(err)
-			}
+			os.Remove(gSocketPath)
 			startServer()
 		}
 	} else {
@@ -190,37 +192,6 @@ func checkServer() {
 			startServer()
 		}
 	}
-}
-
-func printVersion() {
-	if gVersion != "" {
-		fmt.Println(gVersion)
-		return
-	}
-
-	buildInfo, ok := debug.ReadBuildInfo()
-	if !ok {
-		return
-	}
-
-	var vcsRevision, vcsTime, vcsModified string
-	for _, setting := range buildInfo.Settings {
-		switch setting.Key {
-		case "vcs.revision":
-			vcsRevision = setting.Value
-		case "vcs.time":
-			vcsTime = setting.Value
-		case "vcs.modified":
-			if setting.Value == "true" {
-				vcsModified = " (dirty)"
-			}
-		}
-	}
-
-	if vcsRevision != "" {
-		fmt.Printf("Built at commit: %s%s %s\n", vcsRevision, vcsModified, vcsTime)
-	}
-	fmt.Printf("Go version: %s\n", buildInfo.GoVersion)
 }
 
 func main() {
@@ -241,11 +212,6 @@ func main() {
 		false,
 		"show documentation")
 
-	showHelp := flag.Bool(
-		"help",
-		false,
-		"show help")
-
 	showVersion := flag.Bool(
 		"version",
 		false,
@@ -261,67 +227,49 @@ func main() {
 		false,
 		"start a client without server")
 
-	printLastDir := flag.Bool(
-		"print-last-dir",
-		false,
-		"print the last dir to stdout on exit (to use for cd)")
-
-	printSelection := flag.Bool(
-		"print-selection",
-		false,
-		"print the selected files to stdout on open (to use as open file dialog)")
-
 	remoteCmd := flag.String(
 		"remote",
 		"",
-		"send remote `command` to server")
+		"send remote command to server")
 
 	cpuprofile := flag.String(
 		"cpuprofile",
 		"",
-		"`path` to the file to write the CPU profile")
+		"path to the file to write the CPU profile")
 
 	memprofile := flag.String(
 		"memprofile",
 		"",
-		"`path` to the file to write the memory profile")
+		"path to the file to write the memory profile")
 
 	flag.StringVar(&gLastDirPath,
 		"last-dir-path",
 		"",
-		"`path` to the file to write the last dir on exit (to use for cd)")
+		"path to the file to write the last dir on exit (to use for cd)")
 
 	flag.StringVar(&gSelectionPath,
 		"selection-path",
 		"",
-		"`path` to the file to write selected files on open (to use as open file dialog)")
+		"path to the file to write selected files on open (to use as open file dialog)")
 
 	flag.StringVar(&gConfigPath,
 		"config",
 		"",
-		"`path` to the config file (instead of the usual paths)")
+		"path to the config file (instead of the usual paths)")
 
 	flag.Var(&gCommands,
 		"command",
-		"`command` to execute on client initialization")
+		"command to execute on client initialization")
 
 	flag.StringVar(&gLogPath,
 		"log",
 		"",
-		"`path` to the log file to write messages")
+		"path to the log file to write messages")
 
 	flag.Parse()
 
 	gSocketProt = gDefaultSocketProt
 	gSocketPath = gDefaultSocketPath
-
-	if gLogPath != "" {
-		path, err := filepath.Abs(gLogPath)
-		if err != nil {
-			log.Fatalf("getting log path: %s", err)
-		}
-		gLogPath = path
-	}
 
 	if *cpuprofile != "" {
 		f, err := os.Create(*cpuprofile)
@@ -337,26 +285,25 @@ func main() {
 	switch {
 	case *showDoc:
 		fmt.Print(genDocString)
-	case *showHelp:
-		flag.Usage()
 	case *showVersion:
-		printVersion()
+		fmt.Println(gVersion)
 	case *remoteCmd != "":
-		resp, err := remote(*remoteCmd)
-		if err != nil {
+		if err := remote(*remoteCmd); err != nil {
 			log.Fatalf("remote command: %s", err)
-			return
 		}
-		fmt.Print(resp)
 	case *serverMode:
-		if err := os.Chdir(gUser.HomeDir); err != nil {
-			log.Print(err)
+		if gLogPath != "" && !filepath.IsAbs(gLogPath) {
+			wd, err := os.Getwd()
+			if err != nil {
+				log.Fatalf("getting current directory: %s", err)
+			} else {
+				gLogPath = filepath.Join(wd, gLogPath)
+			}
 		}
+		os.Chdir(gUser.HomeDir)
 		serve()
 	default:
 		gSingleMode = *singleMode
-		gPrintLastDir = *printLastDir
-		gPrintSelection = *printSelection
 
 		if !gSingleMode {
 			checkServer()
@@ -374,12 +321,11 @@ func main() {
 		case 1:
 			gSelect = flag.Arg(0)
 		default:
-			fmt.Fprintln(os.Stderr, "only single file or directory is allowed")
+			fmt.Fprintf(os.Stderr, "only single file or directory is allowed\n")
 			os.Exit(2)
 		}
 
 		exportEnvVars()
-		exportFlags()
 
 		run()
 	}

@@ -5,34 +5,12 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-
-	"github.com/gdamore/tcell/v2"
 )
 
-type iconDef struct {
-	icon     string
-	hasStyle bool
-	style    tcell.Style
-}
-
-type iconMap struct {
-	icons         map[string]iconDef
-	useLinkTarget bool
-}
-
-func iconWithoutStyle(icon string) iconDef {
-	return iconDef{icon, false, tcell.StyleDefault}
-}
-
-func iconWithStyle(icon string, style tcell.Style) iconDef {
-	return iconDef{icon, true, style}
-}
+type iconMap map[string]string
 
 func parseIcons() iconMap {
-	im := iconMap{
-		icons:         make(map[string]iconDef),
-		useLinkTarget: false,
-	}
+	im := make(iconMap)
 
 	defaultIcons := []string{
 		"ln=l",
@@ -66,7 +44,7 @@ func parseIcons() iconMap {
 	return im
 }
 
-func (im *iconMap) parseFile(path string) {
+func (im iconMap) parseFile(path string) {
 	log.Printf("reading file: %s", path)
 
 	f, err := os.Open(path)
@@ -76,19 +54,27 @@ func (im *iconMap) parseFile(path string) {
 	}
 	defer f.Close()
 
-	arrs, err := readArrays(f, 1, 3)
+	pairs, err := readPairs(f)
 	if err != nil {
 		log.Printf("reading icons file: %s", err)
 		return
 	}
 
-	for _, arr := range arrs {
-		im.parseArray(arr)
+	for _, pair := range pairs {
+		key, val := pair[0], pair[1]
+
+		key = replaceTilde(key)
+
+		if filepath.IsAbs(key) {
+			key = filepath.Clean(key)
+		}
+
+		im[key] = val
 	}
 }
 
-func (im *iconMap) parseEnv(env string) {
-	for entry := range strings.SplitSeq(env, ":") {
+func (im iconMap) parseEnv(env string) {
+	for _, entry := range strings.Split(env, ":") {
 		if entry == "" {
 			continue
 		}
@@ -100,40 +86,25 @@ func (im *iconMap) parseEnv(env string) {
 			return
 		}
 
-		im.parseArray(pair)
-	}
-}
+		key, val := pair[0], pair[1]
 
-func (im *iconMap) parseArray(arr []string) {
-	key := replaceTilde(arr[0])
+		key = replaceTilde(key)
 
-	if filepath.IsAbs(key) {
-		key = filepath.Clean(key)
-	}
-
-	switch len(arr) {
-	case 1:
-		delete(im.icons, key)
-	case 2:
-		icon := arr[1]
-		if key == "ln" && icon == "target" {
-			im.useLinkTarget = true
-		} else {
-			im.icons[key] = iconWithoutStyle(icon)
+		if filepath.IsAbs(key) {
+			key = filepath.Clean(key)
 		}
-	case 3:
-		icon, color := arr[1], arr[2]
-		im.icons[key] = iconWithStyle(icon, applySGR(color, tcell.StyleDefault))
+
+		im[key] = val
 	}
 }
 
-func (im iconMap) get(f *file) iconDef {
-	if val, ok := im.icons[f.path]; ok {
+func (im iconMap) get(f *file) string {
+	if val, ok := im[f.path]; ok {
 		return val
 	}
 
 	if f.IsDir() {
-		if val, ok := im.icons[f.Name()+"/"]; ok {
+		if val, ok := im[f.Name()+"/"]; ok {
 			return val
 		}
 	}
@@ -141,13 +112,13 @@ func (im iconMap) get(f *file) iconDef {
 	var key string
 
 	switch {
-	case f.linkState == working && !im.useLinkTarget:
+	case f.linkState == working:
 		key = "ln"
 	case f.linkState == broken:
 		key = "or"
-	case f.IsDir() && f.Mode()&os.ModeSticky != 0 && f.Mode()&0o002 != 0:
+	case f.IsDir() && f.Mode()&os.ModeSticky != 0 && f.Mode()&0002 != 0:
 		key = "tw"
-	case f.IsDir() && f.Mode()&0o002 != 0:
+	case f.IsDir() && f.Mode()&0002 != 0:
 		key = "ow"
 	case f.IsDir() && f.Mode()&os.ModeSticky != 0:
 		key = "st"
@@ -157,41 +128,41 @@ func (im iconMap) get(f *file) iconDef {
 		key = "pi"
 	case f.Mode()&os.ModeSocket != 0:
 		key = "so"
-	case f.Mode()&os.ModeCharDevice != 0:
-		key = "cd"
 	case f.Mode()&os.ModeDevice != 0:
 		key = "bd"
+	case f.Mode()&os.ModeCharDevice != 0:
+		key = "cd"
 	case f.Mode()&os.ModeSetuid != 0:
 		key = "su"
 	case f.Mode()&os.ModeSetgid != 0:
 		key = "sg"
-	case f.Mode()&0o111 != 0:
+	case f.Mode()&0111 != 0:
 		key = "ex"
 	}
 
-	if val, ok := im.icons[key]; ok {
+	if val, ok := im[key]; ok {
 		return val
 	}
 
-	if val, ok := im.icons[f.Name()+"*"]; ok {
+	if val, ok := im[f.Name()+"*"]; ok {
 		return val
 	}
 
-	if val, ok := im.icons["*"+f.Name()]; ok {
+	if val, ok := im["*"+f.Name()]; ok {
 		return val
 	}
 
-	if val, ok := im.icons[filepath.Base(f.Name())+".*"]; ok {
+	if val, ok := im[filepath.Base(f.Name())+".*"]; ok {
 		return val
 	}
 
-	if val, ok := im.icons["*"+strings.ToLower(f.ext)]; ok {
+	if val, ok := im["*"+strings.ToLower(f.ext)]; ok {
 		return val
 	}
 
-	if val, ok := im.icons["fi"]; ok {
+	if val, ok := im["fi"]; ok {
 		return val
 	}
 
-	return iconWithoutStyle(" ")
+	return " "
 }

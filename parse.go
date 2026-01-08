@@ -2,43 +2,34 @@ package main
 
 // Grammar of the language used in the evaluator
 //
-// Expr         = SetExpr
-//              | SetLocalExpr
-//              | MapExpr
-//              | NMapExpr
-//              | VMapExpr
-//              | CMapExpr
-//              | CmdExpr
-//              | CallExpr
-//              | ExecExpr
-//              | ListExpr
+// Expr     = SetExpr
+//          | MapExpr
+//          | CMapExpr
+//          | CmdExpr
+//          | CallExpr
+//          | ExecExpr
+//          | ListExpr
 //
-// SetExpr      = 'set' <opt> <val> ';'
+// SetExpr  = 'set' <opt> <val> ';'
 //
-// SetLocalExpr = 'setlocal' <dir> <opt> <val> ';'
+// MapExpr  = 'map' <keys> Expr
 //
-// MapExpr      = 'map' <keys> Expr
+// CMapExpr = 'cmap' <key> Expr
 //
-// NMapExpr     = 'nmap' <keys> Expr
+// CmdExpr  = 'cmd' <name> Expr
 //
-// VMapExpr     = 'vmap' <keys> Expr
+// CallExpr = <name> <args> ';'
 //
-// CMapExpr     = 'cmap' <key> Expr
+// ExecExpr = Prefix      <value>      '\n'
+//          | Prefix '{{' <value> '}}' ';'
 //
-// CmdExpr      = 'cmd' <name> Expr
+// Prefix   = '$' | '%' | '!' | '&'
 //
-// CallExpr     = <name> <args> ';'
+// ListExpr = ':'      Expr ListRest      '\n'
+//          | ':' '{{' Expr ListRest '}}' ';'
 //
-// ExecExpr     = Prefix      <value>      '\n'
-//              | Prefix '{{' <value> '}}' ';'
-//
-// Prefix       = '$' | '%' | '!' | '&'
-//
-// ListExpr     = ':'      Expr ListRest      '\n'
-//              | ':' '{{' Expr ListRest '}}' ';'
-//
-// ListRest     = Nil
-//              | Expr ListExpr
+// ListRest = Nil
+//          | Expr ListExpr
 
 import (
 	"bytes"
@@ -57,85 +48,28 @@ type setExpr struct {
 	val string
 }
 
-func (e *setExpr) String() string {
-	if e.val == "" {
-		return fmt.Sprintf("set %s", e.opt)
-	}
-	return fmt.Sprintf("set %s %s", e.opt, e.val)
-}
-
-type setLocalExpr struct {
-	path string
-	opt  string
-	val  string
-}
-
-func (e *setLocalExpr) String() string {
-	if e.val == "" {
-		return fmt.Sprintf("setlocal %s %s", e.path, e.opt)
-	}
-	return fmt.Sprintf("setlocal %s %s %s", e.path, e.opt, e.val)
-}
+func (e *setExpr) String() string { return fmt.Sprintf("set %s %s", e.opt, e.val) }
 
 type mapExpr struct {
 	keys string
 	expr expr
 }
 
-func (e *mapExpr) String() string {
-	if e.expr == nil {
-		return fmt.Sprintf("map %s", e.keys)
-	}
-	return fmt.Sprintf("map %s %s", e.keys, e.expr)
-}
-
-type nmapExpr struct {
-	keys string
-	expr expr
-}
-
-func (e *nmapExpr) String() string {
-	if e.expr == nil {
-		return fmt.Sprintf("nmap %s", e.keys)
-	}
-	return fmt.Sprintf("nmap %s %s", e.keys, e.expr)
-}
-
-type vmapExpr struct {
-	keys string
-	expr expr
-}
-
-func (e *vmapExpr) String() string {
-	if e.expr == nil {
-		return fmt.Sprintf("vmap %s", e.keys)
-	}
-	return fmt.Sprintf("vmap %s %s", e.keys, e.expr)
-}
+func (e *mapExpr) String() string { return fmt.Sprintf("map %s %s", e.keys, e.expr) }
 
 type cmapExpr struct {
 	key  string
 	expr expr
 }
 
-func (e *cmapExpr) String() string {
-	if e.expr == nil {
-		return fmt.Sprintf("cmap %s", e.key)
-	}
-	return fmt.Sprintf("cmap %s %s", e.key, e.expr)
-}
+func (e *cmapExpr) String() string { return fmt.Sprintf("cmap %s %s", e.key, e.expr) }
 
 type cmdExpr struct {
 	name string
 	expr expr
 }
 
-func (e *cmdExpr) String() string {
-	if e.expr == nil {
-		return fmt.Sprintf("cmd %s", e.name)
-	}
-	return fmt.Sprintf("cmd %s %s", e.name, e.expr)
-}
+func (e *cmdExpr) String() string { return fmt.Sprintf("cmd %s %s", e.name, e.expr) }
 
 type callExpr struct {
 	name  string
@@ -143,9 +77,7 @@ type callExpr struct {
 	count int
 }
 
-func (e *callExpr) String() string {
-	return strings.Join(append([]string{e.name}, e.args...), " ")
-}
+func (e *callExpr) String() string { return fmt.Sprintf("%s -- %s", e.name, e.args) }
 
 type execExpr struct {
 	prefix string
@@ -244,30 +176,6 @@ func (p *parser) parseExpr() expr {
 			s.scan()
 
 			result = &setExpr{opt, val}
-		case "setlocal":
-			var val string
-
-			s.scan()
-			if s.typ != tokenIdent {
-				p.err = fmt.Errorf("expected directory: %s", s.tok)
-			}
-			dir := s.tok
-
-			s.scan()
-			if s.typ != tokenIdent {
-				p.err = fmt.Errorf("expected identifier: %s", s.tok)
-			}
-			opt := s.tok
-
-			s.scan()
-			if s.typ != tokenSemicolon {
-				val = s.tok
-				s.scan()
-			}
-
-			s.scan()
-
-			result = &setLocalExpr{dir, opt, val}
 		case "map":
 			var expr expr
 
@@ -282,34 +190,6 @@ func (p *parser) parseExpr() expr {
 			}
 
 			result = &mapExpr{keys, expr}
-		case "nmap":
-			var expr expr
-
-			s.scan()
-			keys := s.tok
-
-			s.scan()
-			if s.typ != tokenSemicolon {
-				expr = p.parseExpr()
-			} else {
-				s.scan()
-			}
-
-			result = &nmapExpr{keys, expr}
-		case "vmap":
-			var expr expr
-
-			s.scan()
-			keys := s.tok
-
-			s.scan()
-			if s.typ != tokenSemicolon {
-				expr = p.parseExpr()
-			} else {
-				s.scan()
-			}
-
-			result = &vmapExpr{keys, expr}
 		case "cmap":
 			var expr expr
 
@@ -409,6 +289,9 @@ func (p *parser) parseExpr() expr {
 }
 
 func (p *parser) parse() bool {
-	p.expr = p.parseExpr()
-	return p.expr != nil
+	if p.expr = p.parseExpr(); p.expr == nil {
+		return false
+	}
+
+	return true
 }

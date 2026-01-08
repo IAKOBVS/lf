@@ -1,7 +1,6 @@
 package main
 
 import (
-	"fmt"
 	"log"
 	"os"
 	"path/filepath"
@@ -11,16 +10,10 @@ import (
 	"github.com/gdamore/tcell/v2"
 )
 
-type styleMap struct {
-	styles        map[string]tcell.Style
-	useLinkTarget bool
-}
+type styleMap map[string]tcell.Style
 
 func parseStyles() styleMap {
-	sm := styleMap{
-		styles:        make(map[string]tcell.Style),
-		useLinkTarget: false,
-	}
+	sm := make(styleMap)
 
 	// Default values from dircolors
 	//
@@ -88,40 +81,89 @@ func parseStyles() styleMap {
 	return sm
 }
 
-func parseColor(toks []string) (tcell.Color, int, error) {
-	if len(toks) == 0 {
-		return tcell.ColorDefault, 0, fmt.Errorf("invalid args: %v", toks)
+func applyAnsiCodes(s string, st tcell.Style) tcell.Style {
+	toks := strings.Split(s, ";")
+
+	var nums []int
+	for _, tok := range toks {
+		if tok == "" {
+			nums = append(nums, 0)
+			continue
+		}
+		n, err := strconv.Atoi(tok)
+		if err != nil {
+			log.Printf("converting escape code: %s", err)
+			continue
+		}
+		nums = append(nums, n)
 	}
 
-	if toks[0] == "5" && len(toks) >= 2 {
-		n, err := strconv.Atoi(toks[1])
-		if err != nil {
-			return tcell.ColorDefault, 0, fmt.Errorf("invalid args: %v", toks)
+	// ECMA-48 details the standard
+	// TODO: should we support turning off attributes?
+	//    Probably because this is used for previewers too
+	for i := 0; i < len(nums); i++ {
+		n := nums[i]
+		switch {
+		case n == 0:
+			st = tcell.StyleDefault
+		case n == 1:
+			st = st.Bold(true)
+		case n == 2:
+			st = st.Dim(true)
+		case n == 3:
+			st = st.Italic(true)
+		case n == 4:
+			st = st.Underline(true)
+		case n == 5 || n == 6:
+			st = st.Blink(true)
+		case n == 7:
+			st = st.Reverse(true)
+		case n == 8:
+			// TODO: tcell PR for proper conceal
+			_, bg, _ := st.Decompose()
+			st = st.Foreground(bg)
+		case n == 9:
+			st = st.StrikeThrough(true)
+		case n >= 30 && n <= 37:
+			st = st.Foreground(tcell.PaletteColor(n - 30))
+		case n >= 90 && n <= 97:
+			st = st.Foreground(tcell.PaletteColor(n - 82))
+		case n == 38:
+			if i+3 <= len(nums) && nums[i+1] == 5 {
+				st = st.Foreground(tcell.PaletteColor(nums[i+2]))
+				i += 2
+			} else if i+5 <= len(nums) && nums[i+1] == 2 {
+				st = st.Foreground(tcell.NewRGBColor(
+					int32(nums[i+2]),
+					int32(nums[i+3]),
+					int32(nums[i+4])))
+				i += 4
+			} else {
+				log.Printf("unknown ansi code or incorrect form: %d", n)
+			}
+		case n >= 40 && n <= 47:
+			st = st.Background(tcell.PaletteColor(n - 40))
+		case n >= 100 && n <= 107:
+			st = st.Background(tcell.PaletteColor(n - 92))
+		case n == 48:
+			if i+3 <= len(nums) && nums[i+1] == 5 {
+				st = st.Background(tcell.PaletteColor(nums[i+2]))
+				i += 2
+			} else if i+5 <= len(nums) && nums[i+1] == 2 {
+				st = st.Background(tcell.NewRGBColor(
+					int32(nums[i+2]),
+					int32(nums[i+3]),
+					int32(nums[i+4])))
+				i += 4
+			} else {
+				log.Printf("unknown ansi code or incorrect form: %d", n)
+			}
+		default:
+			log.Printf("unknown ansi code: %d", n)
 		}
-
-		return tcell.PaletteColor(n), 2, nil
 	}
 
-	if toks[0] == "2" && len(toks) >= 4 {
-		r, err := strconv.Atoi(toks[1])
-		if err != nil {
-			return tcell.ColorDefault, 0, fmt.Errorf("invalid args: %v", toks)
-		}
-
-		g, err := strconv.Atoi(toks[2])
-		if err != nil {
-			return tcell.ColorDefault, 0, fmt.Errorf("invalid args: %v", toks)
-		}
-
-		b, err := strconv.Atoi(toks[3])
-		if err != nil {
-			return tcell.ColorDefault, 0, fmt.Errorf("invalid args: %v", toks)
-		}
-
-		return tcell.NewRGBColor(int32(r), int32(g), int32(b)), 4, nil
-	}
-
-	return tcell.ColorDefault, 0, fmt.Errorf("invalid args: %v", toks)
+	return st
 }
 
 func (sm styleMap) parseFile(path string) {
@@ -141,13 +183,21 @@ func (sm styleMap) parseFile(path string) {
 	}
 
 	for _, pair := range pairs {
-		sm.parsePair(pair)
+		key, val := pair[0], pair[1]
+
+		key = replaceTilde(key)
+
+		if filepath.IsAbs(key) {
+			key = filepath.Clean(key)
+		}
+
+		sm[key] = applyAnsiCodes(val, tcell.StyleDefault)
 	}
 }
 
 // This function parses $LS_COLORS environment variable.
-func (sm *styleMap) parseGNU(env string) {
-	for entry := range strings.SplitSeq(env, ":") {
+func (sm styleMap) parseGNU(env string) {
+	for _, entry := range strings.Split(env, ":") {
 		if entry == "" {
 			continue
 		}
@@ -159,24 +209,16 @@ func (sm *styleMap) parseGNU(env string) {
 			return
 		}
 
-		sm.parsePair(pair)
+		key, val := pair[0], pair[1]
+
+		key = replaceTilde(key)
+
+		if filepath.IsAbs(key) {
+			key = filepath.Clean(key)
+		}
+
+		sm[key] = applyAnsiCodes(val, tcell.StyleDefault)
 	}
-}
-
-func (sm *styleMap) parsePair(pair []string) {
-	key, val := pair[0], pair[1]
-
-	key = replaceTilde(key)
-
-	if filepath.IsAbs(key) {
-		key = filepath.Clean(key)
-	}
-
-	if key == "ln" && val == "target" {
-		sm.useLinkTarget = true
-	}
-
-	sm.styles[key] = applySGR(val, tcell.StyleDefault)
 }
 
 // This function parses $LSCOLORS environment variable.
@@ -217,17 +259,17 @@ func (sm styleMap) parseBSD(env string) {
 	}
 
 	for i, key := range colorNames {
-		sm.styles[key] = getStyle(env[i*2], env[i*2+1])
+		sm[key] = getStyle(env[i*2], env[i*2+1])
 	}
 }
 
 func (sm styleMap) get(f *file) tcell.Style {
-	if val, ok := sm.styles[f.path]; ok {
+	if val, ok := sm[f.path]; ok {
 		return val
 	}
 
 	if f.IsDir() {
-		if val, ok := sm.styles[f.Name()+"/"]; ok {
+		if val, ok := sm[f.Name()+"/"]; ok {
 			return val
 		}
 	}
@@ -235,13 +277,13 @@ func (sm styleMap) get(f *file) tcell.Style {
 	var key string
 
 	switch {
-	case f.linkState == working && !sm.useLinkTarget:
+	case f.linkState == working:
 		key = "ln"
 	case f.linkState == broken:
 		key = "or"
-	case f.IsDir() && f.Mode()&os.ModeSticky != 0 && f.Mode()&0o002 != 0:
+	case f.IsDir() && f.Mode()&os.ModeSticky != 0 && f.Mode()&0002 != 0:
 		key = "tw"
-	case f.IsDir() && f.Mode()&0o002 != 0:
+	case f.IsDir() && f.Mode()&0002 != 0:
 		key = "ow"
 	case f.IsDir() && f.Mode()&os.ModeSticky != 0:
 		key = "st"
@@ -251,39 +293,39 @@ func (sm styleMap) get(f *file) tcell.Style {
 		key = "pi"
 	case f.Mode()&os.ModeSocket != 0:
 		key = "so"
-	case f.Mode()&os.ModeCharDevice != 0:
-		key = "cd"
 	case f.Mode()&os.ModeDevice != 0:
 		key = "bd"
+	case f.Mode()&os.ModeCharDevice != 0:
+		key = "cd"
 	case f.Mode()&os.ModeSetuid != 0:
 		key = "su"
 	case f.Mode()&os.ModeSetgid != 0:
 		key = "sg"
-	case f.Mode()&0o111 != 0:
+	case f.Mode()&0111 != 0:
 		key = "ex"
 	}
 
-	if val, ok := sm.styles[key]; ok {
+	if val, ok := sm[key]; ok {
 		return val
 	}
 
-	if val, ok := sm.styles[f.Name()+"*"]; ok {
+	if val, ok := sm[f.Name()+"*"]; ok {
 		return val
 	}
 
-	if val, ok := sm.styles["*"+f.Name()]; ok {
+	if val, ok := sm["*"+f.Name()]; ok {
 		return val
 	}
 
-	if val, ok := sm.styles[filepath.Base(f.Name())+".*"]; ok {
+	if val, ok := sm[filepath.Base(f.Name())+".*"]; ok {
 		return val
 	}
 
-	if val, ok := sm.styles["*"+strings.ToLower(f.ext)]; ok {
+	if val, ok := sm["*"+strings.ToLower(f.ext)]; ok {
 		return val
 	}
 
-	if val, ok := sm.styles["fi"]; ok {
+	if val, ok := sm["fi"]; ok {
 		return val
 	}
 

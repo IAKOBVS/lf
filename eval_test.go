@@ -1,7 +1,6 @@
 package main
 
 import (
-	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -193,84 +192,6 @@ var gEvalTests = []struct {
 	},
 
 	{
-		"setlocal /foo/bar hidden # trailing comments are allowed",
-		[]string{"setlocal", "/foo/bar", "hidden", "\n"},
-		[]expr{&setLocalExpr{"/foo/bar", "hidden", ""}},
-	},
-
-	{
-		"setlocal /foo/bar hidden; setlocal /foo/bar reverse",
-		[]string{"setlocal", "/foo/bar", "hidden", ";", "setlocal", "/foo/bar", "reverse", "\n"},
-		[]expr{&setLocalExpr{"/foo/bar", "hidden", ""}, &setLocalExpr{"/foo/bar", "reverse", ""}},
-	},
-
-	{
-		"setlocal /foo/bar hidden\nsetlocal /foo/bar reverse",
-		[]string{"setlocal", "/foo/bar", "hidden", "\n", "setlocal", "/foo/bar", "reverse", "\n"},
-		[]expr{&setLocalExpr{"/foo/bar", "hidden", ""}, &setLocalExpr{"/foo/bar", "reverse", ""}},
-	},
-
-	{
-		`setlocal /foo/bar info ""`,
-		[]string{"setlocal", "/foo/bar", "info", "", "\n"},
-		[]expr{&setLocalExpr{"/foo/bar", "info", ""}},
-	},
-
-	{
-		`setlocal /foo/bar info "size"`,
-		[]string{"setlocal", "/foo/bar", "info", "size", "\n"},
-		[]expr{&setLocalExpr{"/foo/bar", "info", "size"}},
-	},
-
-	{
-		"setlocal /foo/bar info size:time",
-		[]string{"setlocal", "/foo/bar", "info", "size:time", "\n"},
-		[]expr{&setLocalExpr{"/foo/bar", "info", "size:time"}},
-	},
-
-	{
-		"setlocal /foo/bar info size:time;",
-		[]string{"setlocal", "/foo/bar", "info", "size:time", ";"},
-		[]expr{&setLocalExpr{"/foo/bar", "info", "size:time"}},
-	},
-
-	{
-		":setlocal /foo/bar info size:time",
-		[]string{":", "setlocal", "/foo/bar", "info", "size:time", "\n", "\n"},
-		[]expr{&listExpr{[]expr{&setLocalExpr{"/foo/bar", "info", "size:time"}}, 1}},
-	},
-
-	{
-		":setlocal /foo/bar info size:time\nsetlocal /foo/bar hidden",
-		[]string{":", "setlocal", "/foo/bar", "info", "size:time", "\n", "\n", "setlocal", "/foo/bar", "hidden", "\n"},
-		[]expr{&listExpr{[]expr{&setLocalExpr{"/foo/bar", "info", "size:time"}}, 1}, &setLocalExpr{"/foo/bar", "hidden", ""}},
-	},
-
-	{
-		":setlocal /foo/bar info size:time;",
-		[]string{":", "setlocal", "/foo/bar", "info", "size:time", ";", "\n"},
-		[]expr{&listExpr{[]expr{&setLocalExpr{"/foo/bar", "info", "size:time"}}, 1}},
-	},
-
-	{
-		":setlocal /foo/bar info size:time;\nsetlocal /foo/bar hidden",
-		[]string{":", "setlocal", "/foo/bar", "info", "size:time", ";", "\n", "setlocal", "/foo/bar", "hidden", "\n"},
-		[]expr{&listExpr{[]expr{&setLocalExpr{"/foo/bar", "info", "size:time"}}, 1}, &setLocalExpr{"/foo/bar", "hidden", ""}},
-	},
-
-	{
-		"setlocal /foo/bar info size:time\n setlocal /foo/bar hidden",
-		[]string{"setlocal", "/foo/bar", "info", "size:time", "\n", "setlocal", "/foo/bar", "hidden", "\n"},
-		[]expr{&setLocalExpr{"/foo/bar", "info", "size:time"}, &setLocalExpr{"/foo/bar", "hidden", ""}},
-	},
-
-	{
-		"setlocal /foo/bar info size:time \nsetlocal /foo/bar hidden",
-		[]string{"setlocal", "/foo/bar", "info", "size:time", "\n", "setlocal", "/foo/bar", "hidden", "\n"},
-		[]expr{&setLocalExpr{"/foo/bar", "info", "size:time"}, &setLocalExpr{"/foo/bar", "hidden", ""}},
-	},
-
-	{
 		"map gh cd ~",
 		[]string{"map", "gh", "cd", "~", "\n"},
 		[]expr{&mapExpr{"gh", &callExpr{"cd", []string{"~"}, 1}}},
@@ -292,18 +213,6 @@ var gEvalTests = []struct {
 		"map gh :cd ~;",
 		[]string{"map", "gh", ":", "cd", "~", ";", "\n"},
 		[]expr{&mapExpr{"gh", &listExpr{[]expr{&callExpr{"cd", []string{"~"}, 1}}, 1}}},
-	},
-
-	{
-		"nmap <space> :toggle; down",
-		[]string{"nmap", "<space>", ":", "toggle", ";", "down", "\n", "\n"},
-		[]expr{&nmapExpr{"<space>", &listExpr{[]expr{&callExpr{"toggle", nil, 1}, &callExpr{"down", nil, 1}}, 1}}},
-	},
-
-	{
-		"vmap <esc> visual-accept",
-		[]string{"vmap", "<esc>", "visual-accept", "\n"},
-		[]expr{&vmapExpr{"<esc>", &callExpr{"visual-accept", nil, 1}}},
 	},
 
 	{
@@ -521,47 +430,6 @@ func TestParse(t *testing.T) {
 	}
 }
 
-func TestExprString(t *testing.T) {
-	tests := []struct {
-		e   expr
-		exp string
-	}{
-		{&setExpr{"hidden!", ""}, "set hidden!"},
-		{&setExpr{"hidden", "true"}, "set hidden true"},
-		{&setLocalExpr{"~", "hidden!", ""}, "setlocal ~ hidden!"},
-		{&setLocalExpr{"~", "hidden", "true"}, "setlocal ~ hidden true"},
-		{&mapExpr{"q", nil}, "map q"},
-		{&mapExpr{"q", &callExpr{"quit", nil, 1}}, "map q quit"},
-		{&nmapExpr{"q", nil}, "nmap q"},
-		{&nmapExpr{"q", &callExpr{"quit", nil, 1}}, "nmap q quit"},
-		{&vmapExpr{"q", nil}, "vmap q"},
-		{&vmapExpr{"q", &callExpr{"quit", nil, 1}}, "vmap q quit"},
-		{&cmapExpr{"q", nil}, "cmap q"},
-		{&cmapExpr{"q", &callExpr{"quit", nil, 1}}, "cmap q quit"},
-		{&cmdExpr{"foo", nil}, "cmd foo"},
-		{&cmdExpr{"foo", &callExpr{"quit", nil, 1}}, "cmd foo quit"},
-		{&callExpr{"quit", nil, 1}, "quit"},
-		{&callExpr{"cd", []string{"~"}, 1}, "cd ~"},
-		{&execExpr{"$", "du -h . | less"}, "${{ du -h . | less }}"},
-		{
-			&execExpr{"$", `
-				mkdir foo
-				cp $fs foo
-				tar -czvf foo.tar.gz foo
-				rm -rf foo
-			`},
-			"${{ mkdir foo ... }}",
-		},
-		{&listExpr{[]expr{&callExpr{"toggle", nil, 1}, &callExpr{"down", nil, 1}}, 1}, ":{{ toggle; down; }}"},
-	}
-
-	for _, test := range tests {
-		if got := test.e.String(); got != test.exp {
-			t.Errorf("at test '%#v' expected '%s' but got '%s'", test.e, test.exp, got)
-		}
-	}
-}
-
 func TestSplitKeys(t *testing.T) {
 	inps := []struct {
 		s    string
@@ -588,76 +456,6 @@ func TestSplitKeys(t *testing.T) {
 	for _, inp := range inps {
 		if keys := splitKeys(inp.s); !reflect.DeepEqual(keys, inp.keys) {
 			t.Errorf("at input '%s' expected '%v' but got '%v'", inp.s, inp.keys, keys)
-		}
-	}
-}
-
-func TestApplyBoolOpt(t *testing.T) {
-	tests := []struct {
-		opt bool
-		e   setExpr
-		exp bool
-	}{
-		{true, setExpr{"feature", ""}, true},
-		{true, setExpr{"feature", "true"}, true},
-		{true, setExpr{"feature", "false"}, false},
-		{false, setExpr{"feature", ""}, true},
-		{false, setExpr{"feature", "true"}, true},
-		{false, setExpr{"feature", "false"}, false},
-		{true, setExpr{"nofeature", ""}, false},
-		{false, setExpr{"nofeature", ""}, false},
-		{true, setExpr{"feature!", ""}, false},
-		{false, setExpr{"feature!", ""}, true},
-	}
-
-	for _, test := range tests {
-		testStr := fmt.Sprintf("%v", test)
-		if err := applyBoolOpt(&test.opt, &test.e); err != nil {
-			t.Errorf("at test '%s' expected '%t' but got an error '%s'", testStr, test.exp, err)
-			continue
-		}
-		if test.opt != test.exp {
-			t.Errorf("at test '%s' expected '%t' but got '%t'", testStr, test.exp, test.opt)
-		}
-	}
-}
-
-func TestApplyLocalBoolOpt(t *testing.T) {
-	tests := []struct {
-		localOpt  map[string]bool
-		globalOpt bool
-		e         setLocalExpr
-		exp       bool
-	}{
-		{map[string]bool{}, false, setLocalExpr{"/", "feature", ""}, true},
-		{map[string]bool{}, false, setLocalExpr{"/", "feature", "true"}, true},
-		{map[string]bool{}, false, setLocalExpr{"/", "feature", "false"}, false},
-		{map[string]bool{}, false, setLocalExpr{"/", "nofeature", ""}, false},
-		{map[string]bool{}, true, setLocalExpr{"/", "feature!", ""}, false},
-		{map[string]bool{}, false, setLocalExpr{"/", "feature!", ""}, true},
-		{map[string]bool{"/": true}, false, setLocalExpr{"/", "feature", ""}, true},
-		{map[string]bool{"/": true}, false, setLocalExpr{"/", "feature", "true"}, true},
-		{map[string]bool{"/": true}, false, setLocalExpr{"/", "feature", "false"}, false},
-		{map[string]bool{"/": true}, false, setLocalExpr{"/", "nofeature", ""}, false},
-		{map[string]bool{"/": true}, true, setLocalExpr{"/", "feature!", ""}, false},
-		{map[string]bool{"/": true}, false, setLocalExpr{"/", "feature!", ""}, false},
-		{map[string]bool{"/": false}, false, setLocalExpr{"/", "feature", ""}, true},
-		{map[string]bool{"/": false}, false, setLocalExpr{"/", "feature", "true"}, true},
-		{map[string]bool{"/": false}, false, setLocalExpr{"/", "feature", "false"}, false},
-		{map[string]bool{"/": false}, false, setLocalExpr{"/", "nofeature", ""}, false},
-		{map[string]bool{"/": false}, true, setLocalExpr{"/", "feature!", ""}, true},
-		{map[string]bool{"/": false}, false, setLocalExpr{"/", "feature!", ""}, true},
-	}
-
-	for _, test := range tests {
-		testStr := fmt.Sprintf("%v", test)
-		if err := applyLocalBoolOpt(test.localOpt, test.globalOpt, &test.e); err != nil {
-			t.Errorf("at test '%s' expected '%t' but got an error '%s'", testStr, test.exp, err)
-			continue
-		}
-		result := test.localOpt[test.e.path]
-		if result != test.exp {
-			t.Errorf("at test '%s' expected '%t' but got '%t'", testStr, test.exp, result)
 		}
 	}
 }
